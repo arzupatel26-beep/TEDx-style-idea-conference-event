@@ -1,0 +1,586 @@
+// Prisma schema for IDEAS THAT MOVE THE WORLD Event Management Platform
+// Database: PostgreSQL (Neon recommended)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== AUTH & USERS ====================
+
+enum Role {
+  SUPER_ADMIN
+  EVENT_MANAGER
+  SPEAKER_MANAGER
+  REGISTRATION_MANAGER
+  CHECKIN_STAFF
+  SPONSOR_MANAGER
+  FEEDBACK_MANAGER
+  FINANCE_MANAGER
+  SPEAKER
+  ATTENDEE
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String?
+  name          String?
+  phone         String?
+  role          Role      @default(ATTENDEE)
+  isActive      Boolean   @default(true)
+  emailVerified DateTime?
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  attendeeProfile   Attendee?
+  speakerProfile    Speaker?
+  auditLogs         AuditLog[]
+  checkInsPerformed CheckIn[]  @relation("StaffCheckIns")
+  approvedDocs      Document[] @relation("DocumentApprover")
+  expensesApproved  Expense[]  @relation("ExpenseApprover")
+
+  @@index([email])
+  @@index([role])
+}
+
+// ==================== EVENT CONFIG ====================
+
+model EventSettings {
+  id                    String   @id @default(cuid())
+  eventName             String   @default("IDEAS THAT MOVE THE WORLD")
+  tagline               String   @default("Think Beyond. Speak Boldly. Inspire Change.")
+  theme                 String   @default("BEYOND BOUNDARIES – IDEAS THAT SHAPE TOMORROW")
+  startDate             DateTime @default("2027-02-19T00:00:00Z")
+  endDate               DateTime @default("2027-02-21T23:59:59Z")
+  timezone              String   @default("Asia/Kolkata")
+  venueName             String   @default("JNMC Campus, Nehru Nagar, Belagavi, Karnataka, India")
+  venueMapsUrl          String?  @default("https://www.google.com/maps/search/?api=1&query=JNMC+Campus+Nehru+Nagar+Belagavi+590010")
+  contactPhone          String   @default("6362172106")
+  contactEmail          String   @default("arzupatel26@gmail.com")
+  totalCapacity         Int      @default(1000)
+  maxDailyAttendance    Int      @default(600)
+  isRegistrationOpen    Boolean  @default(true)
+  isEventCompleted      Boolean  @default(false)
+  feedbackEnabled       Boolean  @default(false)
+  currency              String   @default("INR")
+  logoUrl               String?
+  primaryColor          String   @default("#0A1F44") // Navy
+  accentColor           String   @default("#D4AF37") // Gold
+  supportingColor       String   @default("#0D9488") // Teal
+  aboutText             String?  @db.Text
+  visionText            String?  @db.Text
+  missionText           String?  @db.Text
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+// ==================== TICKETS & INVENTORY ====================
+
+enum TicketType {
+  DAY1_PASS
+  DAY2_PASS
+  DAY3_PASS
+  THREE_DAY_PASS
+  STUDENT_THREE_DAY_PASS
+}
+
+model TicketCategory {
+  id              String     @id @default(cuid())
+  type            TicketType @unique
+  name            String
+  description     String?
+  priceInPaise    Int        // Store in paise (₹999 = 99900)
+  originalPrice   Int?       // For showing discounts
+  quantityTotal   Int
+  quantitySold    Int        @default(0)
+  quantityReserved Int       @default(0)
+  isActive        Boolean    @default(true)
+  isStudentOnly   Boolean    @default(false)
+  validDays       String[]   // ["2027-02-19", "2027-02-20", "2027-02-21"]
+  inclusions      String[]
+  exclusions      String[]
+  sortOrder       Int        @default(0)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  tickets Ticket[]
+
+  @@index([type])
+  @@index([isActive])
+}
+
+// ==================== ATTENDEES & REGISTRATIONS ====================
+
+enum RegistrationStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  REFUNDED
+  WAITLISTED
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+model Attendee {
+  id              String   @id @default(cuid())
+  userId          String?  @unique
+  registrationId  String   @unique // e.g. ITMW-2027-XXXXXX
+  fullName        String
+  email           String
+  phone           String
+  countryCode     String   @default("+91")
+  country         String
+  city            String
+  organisation    String?
+  designation     String?
+  isStudent       Boolean  @default(false)
+  studentIdUrl    String?  // Uploaded student ID
+  studentVerified Boolean  @default(false)
+  termsAccepted   Boolean  @default(false)
+  privacyAccepted Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user          User?          @relation(fields: [userId], references: [id])
+  registrations Registration[]
+  feedbacks     Feedback[]
+
+  @@index([email])
+  @@index([registrationId])
+}
+
+model Registration {
+  id                String             @id @default(cuid())
+  attendeeId        String
+  ticketCategoryId  String
+  status            RegistrationStatus @default(PENDING_PAYMENT)
+  amountPaidInPaise Int                @default(0)
+  currency          String             @default("INR")
+  notes             String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  attendee       Attendee       @relation(fields: [attendeeId], references: [id], onDelete: Cascade)
+  ticketCategory TicketCategory @relation(fields: [ticketCategoryId], references: [id])
+  tickets        Ticket[]
+  payments       Payment[]
+  refunds        Refund[]
+
+  @@index([attendeeId])
+  @@index([status])
+  @@index([ticketCategoryId])
+}
+
+model Ticket {
+  id              String   @id @default(cuid())
+  registrationId  String
+  ticketCategoryId String
+  qrToken         String   @unique // Cryptographically secure token
+  qrCodeDataUrl   String?  // Base64 QR image
+  isRevoked       Boolean  @default(false)
+  validFrom       DateTime
+  validTo         DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  registration   Registration   @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  ticketCategory TicketCategory @relation(fields: [ticketCategoryId], references: [id])
+  checkIns       CheckIn[]
+
+  @@index([qrToken])
+  @@index([registrationId])
+}
+
+model Payment {
+  id                 String        @id @default(cuid())
+  registrationId     String
+  razorpayOrderId    String?       @unique
+  razorpayPaymentId  String?       @unique
+  razorpaySignature  String?
+  amountInPaise      Int
+  currency           String        @default("INR")
+  status             PaymentStatus @default(CREATED)
+  method             String?
+  email              String?
+  contact            String?
+  errorCode          String?
+  errorDescription   String?
+  webhookReceivedAt  DateTime?
+  verifiedAt         DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  refunds      Refund[]
+
+  @@index([razorpayOrderId])
+  @@index([razorpayPaymentId])
+  @@index([status])
+}
+
+model Refund {
+  id                String   @id @default(cuid())
+  paymentId         String
+  registrationId    String
+  razorpayRefundId  String?  @unique
+  amountInPaise     Int
+  reason            String?
+  status            String   @default("PENDING") // PENDING, PROCESSED, FAILED
+  processedAt       DateTime?
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  payment      Payment      @relation(fields: [paymentId], references: [id])
+  registration Registration @relation(fields: [registrationId], references: [id])
+}
+
+// ==================== CHECK-IN ====================
+
+model CheckIn {
+  id          String   @id @default(cuid())
+  ticketId    String
+  staffId     String?
+  eventDate   DateTime // The specific day checked in for
+  checkedInAt DateTime @default(now())
+  isOffline   Boolean  @default(false)
+  notes       String?
+  location    String?  // e.g. hall name
+
+  ticket Ticket @relation(fields: [ticketId], references: [id])
+  staff  User?  @relation("StaffCheckIns", fields: [staffId], references: [id])
+
+  @@unique([ticketId, eventDate]) // One check-in per day per ticket
+  @@index([eventDate])
+  @@index([ticketId])
+}
+
+// ==================== SPEAKERS ====================
+
+enum InvitationStatus {
+  INVITED
+  ACCEPTED
+  CONFIRMED
+  DECLINED
+  WITHDRAWN
+}
+
+model Speaker {
+  id                String           @id @default(cuid())
+  userId            String?          @unique
+  name              String
+  designation       String?
+  organisation      String?
+  country           String?
+  photoUrl          String?
+  biography         String?          @db.Text
+  profileUrl        String?
+  talkTitle         String?
+  talkDescription   String?          @db.Text
+  invitationStatus  InvitationStatus @default(INVITED)
+  isPublished       Boolean          @default(false) // Only published after approval
+  sortOrder         Int              @default(0)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  user           User?            @relation(fields: [userId], references: [id])
+  sessions       SessionSpeaker[]
+  travelRequests SpeakerTravel[]
+
+  @@index([invitationStatus])
+  @@index([isPublished])
+}
+
+// ==================== SESSIONS & AGENDA ====================
+
+model Auditorium {
+  id                String   @id @default(cuid())
+  name              String
+  building          String?
+  floor             String?
+  seatingCapacity   Int?
+  approvedOccupancy Int?
+  isBooked          Boolean  @default(false)
+  photoUrl          String?
+  facilities        String[]
+  accessibility     String?
+  mapUrl            String?
+  notes             String?  @db.Text
+  isPublished       Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  sessions Session[]
+}
+
+model Session {
+  id            String   @id @default(cuid())
+  title         String
+  description   String?  @db.Text
+  day           Int      // 1, 2 or 3
+  startTime     DateTime
+  endTime       DateTime
+  auditoriumId  String?
+  isProvisional Boolean  @default(true)
+  isPublished   Boolean  @default(false)
+  sessionType   String?  // keynote, panel, workshop, break, etc.
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  auditorium Auditorium?      @relation(fields: [auditoriumId], references: [id])
+  speakers   SessionSpeaker[]
+
+  @@index([day])
+  @@index([startTime])
+}
+
+model SessionSpeaker {
+  id        String @id @default(cuid())
+  sessionId String
+  speakerId String
+  role      String? // keynote, panelist, moderator
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  speaker Speaker @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, speakerId])
+}
+
+// ==================== SPEAKER TRAVEL ====================
+
+model SpeakerTravel {
+  id                    String   @id @default(cuid())
+  speakerId             String
+  departureCity         String?
+  departureCountry      String?
+  preferredMode         String?  // flight, train
+  flightPreferences     String?
+  arrivalDateTime       DateTime?
+  departureDateTime     DateTime?
+  airportOrStation      String?
+  needsPickup           Boolean  @default(false)
+  needsDrop             Boolean  @default(false)
+  hotelCheckIn          DateTime?
+  hotelCheckOut         DateTime?
+  numberOfNights        Int?
+  localTransportNeeds   String?
+  specialRequirements   String?  @db.Text
+  additionalNotes       String?  @db.Text
+  status                String   @default("PENDING") // PENDING, APPROVED, REJECTED, BOOKED
+  flightBookingRef      String?
+  hotelBookingRef       String?
+  transportAssigned     String?
+  itineraryUrl          String?
+  estimatedCostInPaise  Int?
+  actualCostInPaise     Int?
+  adminNotes            String?  @db.Text
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  speaker Speaker @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+}
+
+// ==================== SPONSORS ====================
+
+enum SponsorCategory {
+  TITLE
+  ASSOCIATE
+  SUPPORTING
+  TECHNOLOGY
+  EDUCATION
+  SUSTAINABILITY
+  HOSPITALITY
+  MEDIA
+  COMMUNITY
+}
+
+model Sponsor {
+  id          String          @id @default(cuid())
+  name        String
+  category    SponsorCategory
+  logoUrl     String?
+  websiteUrl  String?
+  description String?
+  isApproved  Boolean         @default(false)
+  isPublished Boolean         @default(false)
+  sortOrder   Int             @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+model SponsorshipEnquiry {
+  id                  String   @id @default(cuid())
+  companyName         String
+  contactPerson       String
+  email               String
+  phone               String?
+  interestCategory    String?
+  proposedContribution String?
+  message             String?  @db.Text
+  status              String   @default("NEW") // NEW, CONTACTED, NEGOTIATING, ACCEPTED, REJECTED
+  adminNotes          String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+// ==================== EMAIL ====================
+
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  slug        String   @unique // e.g. registration-confirmation
+  name        String
+  subject     String
+  htmlBody    String   @db.Text
+  textBody    String?  @db.Text
+  variables   String[] // List of available {{variables}}
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model EmailLog {
+  id            String   @id @default(cuid())
+  templateSlug  String?
+  toEmail       String
+  subject       String
+  status        String   // SENT, FAILED, DELIVERED, BOUNCED
+  resendId      String?
+  errorMessage  String?
+  metadata      Json?
+  sentAt        DateTime @default(now())
+
+  @@index([toEmail])
+  @@index([status])
+}
+
+// ==================== FEEDBACK ====================
+
+model Feedback {
+  id            String   @id @default(cuid())
+  attendeeId    String
+  overallRating Int      // 1-5
+  speakersRating Int?
+  sessionsRating Int?
+  venueRating   Int?
+  registrationRating Int?
+  checkInRating Int?
+  staffRating   Int?
+  timeManagementRating Int?
+  foodRating    Int?
+  networkingRating Int?
+  favouriteSession String?
+  improvements  String?  @db.Text
+  suggestions   String?  @db.Text
+  submittedAt   DateTime @default(now())
+
+  attendee Attendee @relation(fields: [attendeeId], references: [id])
+
+  @@unique([attendeeId]) // One feedback per attendee by default
+}
+
+// ==================== DOCUMENTS & APPROVALS ====================
+
+enum ApprovalStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+model Document {
+  id              String         @id @default(cuid())
+  title           String
+  description     String?
+  category        String         // branding, speaker, venue, sponsor, operational, budget
+  fileUrl         String?
+  status          ApprovalStatus @default(PENDING)
+  responsiblePerson String?
+  adminNotes      String?
+  approvedById    String?
+  approvedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  approvedBy User? @relation("DocumentApprover", fields: [approvedById], references: [id])
+}
+
+// ==================== BUDGET ====================
+
+model BudgetCategory {
+  id            String   @id @default(cuid())
+  name          String
+  plannedAmount Int      // In paise
+  notes         String?
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  expenses Expense[]
+}
+
+model Expense {
+  id              String         @id @default(cuid())
+  budgetCategoryId String
+  description     String
+  plannedAmount   Int?
+  actualAmount    Int?
+  supplierQuote   Int?
+  amountPaid      Int            @default(0)
+  outstanding     Int?
+  invoiceUrl      String?
+  status          ApprovalStatus @default(PENDING)
+  approvedById    String?
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  budgetCategory BudgetCategory @relation(fields: [budgetCategoryId], references: [id])
+  approvedBy     User?          @relation("ExpenseApprover", fields: [approvedById], references: [id])
+}
+
+// ==================== CONTACT & MISC ====================
+
+model ContactEnquiry {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  phone     String?
+  subject   String?
+  message   String   @db.Text
+  status    String   @default("NEW")
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
